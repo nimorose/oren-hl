@@ -259,22 +259,38 @@ class PositionTracker:
 
 # ─── REST Poller ────────────────────────────────────────────────────────────
 async def fetch_clearinghouse_state(session: aiohttp.ClientSession) -> dict:
-    """Fetch current positions via REST API."""
-    payload = {
+    """Fetch current positions via REST API (default + HIP-3 dexes)."""
+    # Query default dex
+    payload_default = {
         "type": "clearinghouseState",
         "user": CONFIG["TARGET_ADDRESS"],
     }
-    async with session.post(
-        CONFIG["HL_REST_URL"],
-        json=payload,
-        timeout=aiohttp.ClientTimeout(total=10),
-    ) as resp:
-        if resp.status == 200:
-            return await resp.json()
-        else:
-            body = await resp.text()
-            log.error(f"REST API error {resp.status}: {body}")
-            return {}
+    # Query xyz dex (HIP-3 assets like CL, etc.)
+    payload_xyz = {
+        "type": "clearinghouseState",
+        "user": CONFIG["TARGET_ADDRESS"],
+        "dex": "xyz",
+    }
+    
+    combined = {"assetPositions": []}
+    
+    for payload in [payload_default, payload_xyz]:
+        try:
+            async with session.post(
+                CONFIG["HL_REST_URL"],
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    combined["assetPositions"].extend(data.get("assetPositions", []))
+                    # Keep margin summary from first response
+                    if "marginSummary" not in combined:
+                        combined["marginSummary"] = data.get("marginSummary", {})
+        except Exception as e:
+            log.error(f"Error fetching clearinghouseState: {e}")
+    
+    return combined
 
 
 async def position_poller(notifier: TelegramNotifier, tracker: PositionTracker):
